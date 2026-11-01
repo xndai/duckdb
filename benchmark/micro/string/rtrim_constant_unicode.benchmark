@@ -1,0 +1,14 @@
+# name: benchmark/micro/string/rtrim_constant_unicode.benchmark
+# description: RTRIM with a constant trim set containing a multi-byte character
+# group: [string]
+
+name RTRIM Constant Unicode
+group string
+
+load benchmark/micro/string/trim_strings.sql
+
+run
+SELECT SUM(LENGTH(RTRIM(s, ' 　'))) FROM trim_strings
+
+result I
+128888890

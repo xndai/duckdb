@@ -1,0 +1,14 @@
+# name: benchmark/micro/string/trim_column.benchmark
+# description: TRIM with a non-constant trim set
+# group: [string]
+
+name TRIM Column
+group string
+
+load benchmark/micro/string/trim_strings.sql
+
+run
+SELECT SUM(LENGTH(TRIM(s2, chars))) FROM trim_strings
+
+result I
+43899999

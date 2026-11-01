@@ -1,0 +1,1 @@
+CREATE TABLE trim_strings AS SELECT concat('value_', (i * 9582398353) % 10000000, repeat(' ', (i % 8)::INT)) AS s, concat(repeat('x', (i % 3)::INT), 'v', i % 1000, repeat('y', (i % 4)::INT)) AS s2, CASE WHEN i % 2 = 0 THEN 'xy' ELSE 'y' END AS chars FROM range(0, 10000000) tbl(i);

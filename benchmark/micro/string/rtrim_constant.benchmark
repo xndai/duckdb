@@ -1,0 +1,14 @@
+# name: benchmark/micro/string/rtrim_constant.benchmark
+# description: RTRIM with a constant single-character trim set
+# group: [string]
+
+name RTRIM Constant
+group string
+
+load benchmark/micro/string/trim_strings.sql
+
+run
+SELECT SUM(LENGTH(RTRIM(s, ' '))) FROM trim_strings
+
+result I
+128888890
