@@ -61,7 +61,7 @@ static void UnaryTrimFunction(DataChunk &args, ExpressionState &state, Vector &r
 	UnaryExecutor::ExecuteString<string_t, string_t, TrimOperator<LTRIM, RTRIM>>(args.data[0], result);
 }
 
-//! The set of codepoints to trim, with ASCII codepoints stored in a bitmap
+//! The set of codepoints to trim; ASCII codepoints are kept in a bitmap so a lookup is a shift and a mask
 struct TrimCodepointSet {
 	void Initialize(string_t characters) {
 		ascii[0] = 0;
@@ -93,11 +93,13 @@ struct TrimCodepointSet {
 		return std::binary_search(non_ascii.begin(), non_ascii.end(), codepoint);
 	}
 
+	//! Bit c is set if ASCII codepoint c is trimmed: codepoints 0-63 in ascii[0], 64-127 in ascii[1]
 	uint64_t ascii[2];
+	//! Trimmed non-ASCII codepoints, sorted for binary search
 	vector<int32_t> non_ascii;
 };
 
-//! Returns a view into the input; the caller must add a heap reference to the input vector
+//! Returns a slice of the input without copying it, so the input's string data must outlive the result
 template <bool LTRIM, bool RTRIM>
 static string_t TrimCodepoints(string_t input, const TrimCodepointSet &trim_set) {
 	auto data = input.GetData();
@@ -149,23 +151,25 @@ static string_t TrimCodepoints(string_t input, const TrimCodepointSet &trim_set)
 template <bool LTRIM, bool RTRIM>
 static void BinaryTrimFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	auto &strings = input.data[0];
-	auto &characters = input.data[1];
+	auto &characters_vector = input.data[1];
 	TrimCodepointSet trim_set;
-	if (characters.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-		if (ConstantVector::IsNull(characters)) {
+	if (characters_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		// a NULL trim set makes every result NULL
+		if (ConstantVector::IsNull(characters_vector)) {
 			ConstantVector::SetNull(result, count_t(input.size()));
 			return;
 		}
-		trim_set.Initialize(ConstantVector::GetData<string_t>(characters)[0]);
+		trim_set.Initialize(ConstantVector::GetData<string_t>(characters_vector)[0]);
 		UnaryExecutor::Execute<string_t, string_t>(
 		    strings, result, [&](string_t str) { return TrimCodepoints<LTRIM, RTRIM>(str, trim_set); });
 	} else {
-		BinaryExecutor::Execute<string_t, string_t, string_t>(strings, characters, result,
-		                                                      [&](string_t str, string_t ignored) {
-			                                                      trim_set.Initialize(ignored);
+		BinaryExecutor::Execute<string_t, string_t, string_t>(strings, characters_vector, result,
+		                                                      [&](string_t str, string_t characters) {
+			                                                      trim_set.Initialize(characters);
 			                                                      return TrimCodepoints<LTRIM, RTRIM>(str, trim_set);
 		                                                      });
 	}
+	// the results point into the input strings, so the result vector keeps their buffers alive
 	StringVector::AddHeapReference(result, strings);
 }
 
