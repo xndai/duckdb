@@ -361,3 +361,66 @@ TEST_CASE("Table function client context return") {
 	REQUIRE(result->Fetch<int64_t>(1, 1) == 42);
 	REQUIRE(result->Fetch<int64_t>(1, 2) == 42);
 }
+
+static const char *const INVALID_UTF8_STRINGS[] = {"abc\xC3  ",
+                                                   "  \x80"
+                                                   "abc",
+                                                   "  \xFF\xFE  ",
+                                                   "  a long string ending in a truncated character \xE2\x82  "};
+static constexpr idx_t INVALID_UTF8_COUNT = sizeof(INVALID_UTF8_STRINGS) / sizeof(INVALID_UTF8_STRINGS[0]);
+
+void invalid_utf8_bind(duckdb_bind_info info) {
+	duckdb_logical_type type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+	duckdb_bind_add_result_column(info, "s", type);
+	duckdb_destroy_logical_type(&type);
+}
+
+void invalid_utf8_init(duckdb_init_info info) {
+	auto done = (bool *)malloc(sizeof(bool));
+	*done = false;
+	duckdb_init_set_init_data(info, done, free);
+}
+
+void invalid_utf8_function(duckdb_function_info info, duckdb_data_chunk output) {
+	auto done = (bool *)duckdb_function_get_init_data(info);
+	if (*done) {
+		duckdb_data_chunk_set_size(output, 0);
+		return;
+	}
+	auto vector = duckdb_data_chunk_get_vector(output, 0);
+	for (idx_t i = 0; i < INVALID_UTF8_COUNT; i++) {
+		duckdb_unsafe_vector_assign_string_element_len(vector, i, INVALID_UTF8_STRINGS[i],
+		                                               strlen(INVALID_UTF8_STRINGS[i]));
+	}
+	duckdb_data_chunk_set_size(output, INVALID_UTF8_COUNT);
+	*done = true;
+}
+
+TEST_CASE("Test trim with an ASCII trim set on invalid UTF-8 from the C API", "[capi]") {
+	CAPITester tester;
+	duckdb::unique_ptr<CAPIResult> result;
+
+	REQUIRE(tester.OpenDatabase(nullptr));
+	auto function = duckdb_create_table_function();
+	duckdb_table_function_set_name(function, "invalid_utf8_strings");
+	duckdb_table_function_set_bind(function, invalid_utf8_bind);
+	duckdb_table_function_set_init(function, invalid_utf8_init);
+	duckdb_table_function_set_function(function, invalid_utf8_function);
+	REQUIRE(duckdb_register_table_function(tester.connection, function) == DuckDBSuccess);
+	duckdb_destroy_table_function(&function);
+
+	result = tester.Query("SELECT LTRIM(s, ' '), RTRIM(s, ' '), TRIM(s, ' ') FROM invalid_utf8_strings()");
+	REQUIRE_NO_FAIL(*result);
+	REQUIRE(result->row_count() == INVALID_UTF8_COUNT);
+	REQUIRE(result->Fetch<string>(0, 0) == "abc\xC3  ");
+	REQUIRE(result->Fetch<string>(1, 0) == "abc\xC3");
+	REQUIRE(result->Fetch<string>(2, 0) == "abc\xC3");
+	REQUIRE(result->Fetch<string>(0, 1) == "\x80"
+	                                       "abc");
+	REQUIRE(result->Fetch<string>(1, 1) == "  \x80"
+	                                       "abc");
+	REQUIRE(result->Fetch<string>(2, 1) == "\x80"
+	                                       "abc");
+	REQUIRE(result->Fetch<string>(2, 2) == "\xFF\xFE");
+	REQUIRE(result->Fetch<string>(2, 3) == "a long string ending in a truncated character \xE2\x82");
+}

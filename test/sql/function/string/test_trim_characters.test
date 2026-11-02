@@ -1,0 +1,146 @@
+# name: test/sql/function/string/test_trim_characters.test
+# description: LTRIM/RTRIM/TRIM with an explicit set of characters
+# group: [string]
+
+statement ok
+CREATE TABLE strings(s VARCHAR, chars VARCHAR)
+
+statement ok
+INSERT INTO strings VALUES
+	('  hello  ', ' '),
+	('xxhelloyy', 'xy'),
+	('', ' '),
+	('     ', ' '),
+	(NULL, ' '),
+	('  hello  ', NULL),
+	('  hello  ', ''),
+	('  a long string that is not inlined     ', ' '),
+	('                ahello world         ', ' a'),
+	('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'aaa'),
+	('éé héllo éé', ' é'),
+	('　 hello 　', '　'),
+	('　 hello 　', ' 　'),
+	('ééxhelloxéé', 'x'),
+	('x🦆x🦆', 'x🦆'),
+	('🦆hello🦆', '🦆')
+
+# constant ASCII trim set
+query III
+SELECT '[' || LTRIM(s, ' ') || ']', '[' || RTRIM(s, ' ') || ']', '[' || TRIM(s, ' ') || ']' FROM strings
+----
+[hello  ]	[  hello]	[hello]
+[xxhelloyy]	[xxhelloyy]	[xxhelloyy]
+[]	[]	[]
+[]	[]	[]
+NULL	NULL	NULL
+[hello  ]	[  hello]	[hello]
+[hello  ]	[  hello]	[hello]
+[a long string that is not inlined     ]	[  a long string that is not inlined]	[a long string that is not inlined]
+[ahello world         ]	[                ahello world]	[ahello world]
+[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]	[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]	[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+[éé héllo éé]	[éé héllo éé]	[éé héllo éé]
+[　 hello 　]	[　 hello 　]	[　 hello 　]
+[　 hello 　]	[　 hello 　]	[　 hello 　]
+[ééxhelloxéé]	[ééxhelloxéé]	[ééxhelloxéé]
+[x🦆x🦆]	[x🦆x🦆]	[x🦆x🦆]
+[🦆hello🦆]	[🦆hello🦆]	[🦆hello🦆]
+
+# constant trim set with multi-byte characters
+query III
+SELECT '[' || LTRIM(s, ' é　🦆') || ']', '[' || RTRIM(s, ' é　🦆') || ']', '[' || TRIM(s, ' é　🦆') || ']' FROM strings
+----
+[hello  ]	[  hello]	[hello]
+[xxhelloyy]	[xxhelloyy]	[xxhelloyy]
+[]	[]	[]
+[]	[]	[]
+NULL	NULL	NULL
+[hello  ]	[  hello]	[hello]
+[hello  ]	[  hello]	[hello]
+[a long string that is not inlined     ]	[  a long string that is not inlined]	[a long string that is not inlined]
+[ahello world         ]	[                ahello world]	[ahello world]
+[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]	[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]	[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+[héllo éé]	[éé héllo]	[héllo]
+[hello 　]	[　 hello]	[hello]
+[hello 　]	[　 hello]	[hello]
+[xhelloxéé]	[ééxhellox]	[xhellox]
+[x🦆x🦆]	[x🦆x]	[x🦆x]
+[hello🦆]	[🦆hello]	[hello]
+
+# non-constant trim set
+query III
+SELECT '[' || LTRIM(s, chars) || ']', '[' || RTRIM(s, chars) || ']', '[' || TRIM(s, chars) || ']' FROM strings
+----
+[hello  ]	[  hello]	[hello]
+[helloyy]	[xxhello]	[hello]
+[]	[]	[]
+[]	[]	[]
+NULL	NULL	NULL
+NULL	NULL	NULL
+[  hello  ]	[  hello  ]	[  hello  ]
+[a long string that is not inlined     ]	[  a long string that is not inlined]	[a long string that is not inlined]
+[hello world         ]	[                ahello world]	[hello world]
+[]	[]	[]
+[héllo éé]	[éé héllo]	[héllo]
+[ hello 　]	[　 hello ]	[ hello ]
+[hello 　]	[　 hello]	[hello]
+[ééxhelloxéé]	[ééxhelloxéé]	[ééxhelloxéé]
+[]	[]	[]
+[hello🦆]	[🦆hello]	[hello]
+
+# constant string with a non-constant trim set
+query T
+SELECT TRIM('xxhelloyy', chars) FROM strings WHERE chars IN ('xy', '') OR chars IS NULL ORDER BY ALL
+----
+hello
+xxhelloyy
+NULL
+
+# constant NULL trim set
+query III
+SELECT LTRIM(s, NULL), RTRIM(s, NULL), TRIM(s, NULL) FROM strings LIMIT 2
+----
+NULL	NULL	NULL
+NULL	NULL	NULL
+
+# the trimmed strings outlive the input vectors
+statement ok
+CREATE TABLE trimmed AS SELECT RTRIM(s, ' ') AS r, TRIM(s, chars) AS t FROM strings
+
+query II
+SELECT r, t FROM trimmed WHERE r LIKE '%long string%' OR t LIKE '%hello world' ORDER BY ALL
+----
+                ahello world	hello world
+  a long string that is not inlined	a long string that is not inlined
+
+statement ok
+CREATE TABLE padded AS SELECT concat('value_', i, repeat(' ', (i % 30)::INT)) AS s FROM range(10000) tbl(i)
+
+query II
+SELECT COUNT(DISTINCT RTRIM(s, ' ')), SUM(LENGTH(RTRIM(s, ' '))) FROM padded
+----
+10000	98890
+
+query I
+SELECT COUNT(*) FROM padded WHERE RTRIM(s, ' ') IN ('value_1', 'value_29', 'value_9999', 'value_10000')
+----
+3
+
+query I
+SELECT RTRIM(s, ' ') FROM padded ORDER BY LENGTH(s) DESC, s LIMIT 3
+----
+value_1019
+value_1049
+value_1079
+
+# non-constant trim sets over many chunks match the same sets passed as constants
+statement ok
+CREATE TABLE mixed_chars AS SELECT concat(repeat('x', (i % 3)::INT), 'é', i, repeat(' ', (i % 5)::INT)) AS s, CASE i % 3 WHEN 0 THEN ' ' WHEN 1 THEN 'x ' ELSE 'é x' END AS chars FROM range(10000) tbl(i)
+
+query II
+SELECT COUNT(*) FILTER (WHERE LTRIM(s, chars) <> CASE chars WHEN ' ' THEN LTRIM(s, ' ') WHEN 'x ' THEN LTRIM(s, 'x ') ELSE LTRIM(s, 'é x') END
+                         OR RTRIM(s, chars) <> CASE chars WHEN ' ' THEN RTRIM(s, ' ') WHEN 'x ' THEN RTRIM(s, 'x ') ELSE RTRIM(s, 'é x') END
+                         OR TRIM(s, chars) <> CASE chars WHEN ' ' THEN TRIM(s, ' ') WHEN 'x ' THEN TRIM(s, 'x ') ELSE TRIM(s, 'é x') END),
+       SUM(LENGTH(s) - LENGTH(TRIM(s, chars))) > 0
+FROM mixed_chars
+----
+0	true

@@ -1,0 +1,14 @@
+# name: benchmark/micro/string/trim_constant.benchmark
+# description: TRIM with a constant multi-character trim set
+# group: [string]
+
+name TRIM Constant
+group string
+
+load benchmark/micro/string/trim_strings.sql
+
+run
+SELECT SUM(LENGTH(TRIM(s2, 'xy'))) FROM trim_strings
+
+result I
+38900000
